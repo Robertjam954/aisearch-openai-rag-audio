@@ -33,6 +33,7 @@ urlFragment: aisearch-openai-rag-audio
   - [Pricing considerations](#pricing-considerations)
   - [Deploy instructions](#deploy-instructions)
   - [Testing the deployment](#testing-the-deployment)
+- [Automated self-documentation](#automated-self-documentation)
 - [Supporting documentation](#supporting-documentation)
   - [Resource links](#resource-links)
   - [Licensing](#licensing)
@@ -187,6 +188,14 @@ Note the two ports: local `app.py` serves on 8765; the deployed container runs g
 2. Click the start/mic button and say "Hello", then ask a question about the sample data, e.g. "What is included in the Northwind Health Plus plan?" or "What is Contoso's whistleblower policy?".
 3. Expect a spoken audio answer and one or more grounding citation chips below it; clicking a chip opens the retrieved source chunk.
 4. Ask something outside the corpus - the assistant should say it does not know rather than hallucinate.
+
+## Automated self-documentation
+
+This repository keeps its own documentation current on a fixed loop:
+
+- End of every working session: CLAUDE.md, this README, `app/backend/requirements.txt`, and any affected prep docs are updated to match reality.
+- Every Monday at 09:00 UTC: the GitHub Actions workflow [`update-claude-md.yml`](.github/workflows/update-claude-md.yml) runs Claude Code with the prompt in [`claude-md-review-prompt.md`](.github/workflows/claude-md-review-prompt.md). It verifies CLAUDE.md and this README against the code, checks `app/backend/requirements.txt` against actual imports, regenerates the prioritized [TODO.md](TODO.md), and opens a pull request with any corrections. It can also be triggered manually from the Actions tab.
+- The workflow requires the `CLAUDE_CODE_OAUTH_TOKEN` repository secret (generate with `claude setup-token`).
 
 ## Supporting documentation
 
