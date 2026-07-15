@@ -8,7 +8,6 @@ current state of the codebase.
 
 - [ ] Reconcile `infra/main.parameters.json` with `infra/main.bicep`: the parameters file passes `embeddingDimensions` (`AZURE_OPENAI_EMB_DIMENSIONS`) but `main.bicep` declares no such parameter; either add the param and thread it through to `setup_intvect.py` (which hardcodes 3072) or delete the entry.
 - [ ] Fix AGENTS.md drift: frontend entrypoint is `app/frontend/src/index.tsx`, not `src/main.tsx`; `data/` is mostly PDFs, not "Markdown documents"; the backend is aiohttp, but `infra/main.bicep` line 181 comment still says "Python Quart app".
-- [ ] Normalize or document the UTF-16 LE encoding of `app/backend/requirements.txt`; it breaks grep-based tooling and is easy to corrupt (documented in CLAUDE.md section 8, but converting to UTF-8 is the real fix).
 - [ ] `rtmt.py` defines `tools`, `_tools_pending`, and other config as class-level mutable attributes on `RTMiddleTier`; move them into `__init__` to avoid shared state if a second instance is ever created.
 
 ## P2 - In-flight and target work
@@ -34,4 +33,5 @@ current state of the codebase.
 
 ## Done since last week
 
+- Normalized `app/backend/requirements.txt` from UTF-16 LE to UTF-8, declared the directly-imported `azure-core`, and wired the manifest into the weekly verification workflow (2026-07-15).
 - Initial prep-doc set added (CLAUDE.md, PRODUCT.md, ARCHITECTURE.md, root CONTRIBUTING.md, .github/copilot-instructions.md) plus the weekly docs workflow and this TODO seed (2026-07-15).

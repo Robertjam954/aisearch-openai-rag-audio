@@ -49,5 +49,6 @@ There is no test suite yet, so the bar is: it must run.
 - Update the prep docs (CLAUDE.md, and PRODUCT.md / ARCHITECTURE.md when
   behavior or structure changes) in the same PR as the code change - see the
   self-documentation protocol in CLAUDE.md.
-- Watch the encoding of `app/backend/requirements.txt` (UTF-16 LE) when
-  editing dependencies.
+- `app/backend/requirements.txt` is plain UTF-8 (normalized from UTF-16 LE on
+  2026-07-15); keep it that way, and keep it in sync with the actual
+  third-party imports in `app/backend/*.py` when editing dependencies.

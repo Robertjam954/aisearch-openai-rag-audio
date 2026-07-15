@@ -22,7 +22,8 @@ against Azure AI Search server-side.
 - app/backend/ - aiohttp app: app.py (factory, env + credential wiring, serves
   static frontend), rtmt.py (RTMiddleTier WebSocket proxy + tool execution),
   ragtools.py (search + report_grounding tools), setup_intvect.py (index/skillset/
-  indexer creation + data upload). requirements.txt is UTF-16 LE encoded.
+  indexer creation + data upload). requirements.txt is plain UTF-8 (normalized
+  from UTF-16 LE on 2026-07-15).
 - app/frontend/ - React 18 + TypeScript + Vite 7 + Tailwind; entrypoint
   src/index.tsx; hooks useRealtime/useAudioRecorder/useAudioPlayer; audio worklets
   in public/; i18n locales en/es/fr/ja; builds into app/backend/static/.
@@ -62,6 +63,12 @@ against Azure AI Search server-side.
    workflows; document what each does.
 7. **Conventions and gotchas** - extract coding conventions from the code; keep any
    documented gotchas that still apply and remove ones that no longer do.
+8. **Backend dependency manifest** - verify `app/backend/requirements.txt` against
+   the actual third-party imports in `app/backend/*.py`: every imported third-party
+   package must be declared, and every declared entry must be either imported or
+   otherwise justified (`gunicorn` is used by `app/Dockerfile`, not imported).
+   Keep existing version pins. Verify textually only - never run pip install or
+   any other install command. Keep the file UTF-8 encoded.
 
 ### README.md verification
 

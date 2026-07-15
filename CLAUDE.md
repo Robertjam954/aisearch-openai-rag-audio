@@ -25,8 +25,9 @@ Key capabilities:
 - `azure-identity 1.18.0` (AzureDeveloperCliCredential / DefaultAzureCredential / key auth fallback).
 - `azure-search-documents 11.6.0b4` (beta pin, needed for integrated-vectorization index classes used by `setup_intvect.py`).
 - `azure-storage-blob 12.23.1` (document upload in `setup_intvect.py`).
-- `python-dotenv 1.0.1`, `gunicorn` (production server), `rich` (logging in setup script).
-- Dependencies are plain pinned `requirements.txt` (no uv/pip-compile, no lock file).
+- `python-dotenv 1.0.1`, `gunicorn` (production server, used by the Dockerfile - not imported), `rich` (logging in setup script).
+- `azure-core` (unpinned; declared explicitly because `AzureKeyCredential` and `ResourceExistsError` are imported directly - the version is resolved by the other azure pins).
+- Dependencies are plain pinned `requirements.txt` (no uv/pip-compile, no lock file), UTF-8 encoded.
 
 ### Frontend (`app/frontend/`)
 - React 18.3 + TypeScript 5.5, built with **Vite 7**.
@@ -60,7 +61,7 @@ aisearch-openai-rag-audio/
 │   │   ├── rtmt.py                # RTMiddleTier: realtime WebSocket proxy + tool execution
 │   │   ├── ragtools.py            # search + report_grounding tools over Azure AI Search
 │   │   ├── setup_intvect.py       # creates index/skillset/indexer, uploads data/, runs indexer
-│   │   └── requirements.txt       # NOTE: UTF-16 encoded
+│   │   └── requirements.txt       # plain UTF-8 pinned deps
 │   └── frontend/
 │       ├── src/index.tsx          # React entrypoint (not main.tsx)
 │       ├── src/App.tsx            # single-page UI: mic button, grounding files
@@ -182,7 +183,7 @@ Infra-side azd variables (see `infra/main.parameters.json` and `docs/existing_se
 
 ## 8. Gotchas
 
-- **`app/backend/requirements.txt` is UTF-16 LE encoded.** pip handles it, but `grep`/`cat` show mangled text and naive edits can corrupt it. If you rewrite it, keep or deliberately normalize the encoding.
+- **`app/backend/requirements.txt` was normalized to UTF-8 on 2026-07-15** (it was UTF-16 LE upstream). Keep it UTF-8; if `grep`/`cat` ever show mangled text again, something re-corrupted the encoding.
 - **Deployed infra disables key auth**: `main.bicep` sets `disableLocalAuth: true` on both Azure OpenAI and AI Search, so `AZURE_OPENAI_API_KEY`/`AZURE_SEARCH_API_KEY` only work against services provisioned some other way. Use Entra ID (`azd auth login` locally, managed identity in Azure).
 - **Two different ports**: local `app.py` runs on 8765; the container runs gunicorn on 8000 (Container Apps targetPort 8000). The Vite dev proxy targets 8765.
 - **Frontend must be built before running the backend standalone** - `app.py` serves `app/backend/static/`, which only exists after `npm run build` (start.sh does this for you).
@@ -200,14 +201,17 @@ This repository is self-documenting. Two mechanisms keep the docs honest:
 1. **End of every session:** before finishing any working session that changed
    code, commands, dependencies, structure, or conventions, update CLAUDE.md (and
    the affected prep docs: README.md, PRODUCT.md, ARCHITECTURE.md, CONTRIBUTING.md)
-   so they match reality. Reality wins over stale documentation. This applies to
-   human and agent sessions alike.
+   so they match reality. If backend imports changed, update
+   `app/backend/requirements.txt` in the same session so it declares every
+   third-party package imported in `app/backend/*.py`. Reality wins over stale
+   documentation. This applies to human and agent sessions alike.
 2. **Every Monday:** the `.github/workflows/update-claude-md.yml` workflow runs an
    automated verification pass (09:00 UTC). It re-analyzes the codebase, corrects
-   any drift in CLAUDE.md and README.md that session updates missed, regenerates
-   the prioritized `TODO.md` at the repo root, and opens a PR for review. It
-   requires the `CLAUDE_CODE_OAUTH_TOKEN` repository secret (generate with
-   `claude setup-token`).
+   any drift in CLAUDE.md and README.md that session updates missed, verifies
+   `app/backend/requirements.txt` against the actual backend imports (textually -
+   it never runs installs), regenerates the prioritized `TODO.md` at the repo
+   root, and opens a PR for review. It requires the `CLAUDE_CODE_OAUTH_TOKEN`
+   repository secret (generate with `claude setup-token`).
 
 `TODO.md` is machine-refreshed weekly: treat it as the current backlog, edit it
 freely during the week, and expect the Monday run to re-prioritize it.
