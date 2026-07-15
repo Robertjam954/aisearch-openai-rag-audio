@@ -63,13 +63,25 @@ against Azure AI Search server-side.
 7. **Conventions and gotchas** - extract coding conventions from the code; keep any
    documented gotchas that still apply and remove ones that no longer do.
 
-### Output requirements for CLAUDE.md
+### README.md verification
+
+Verify README.md the same way as CLAUDE.md and fix only drift:
+
+- The YAML front-matter (languages, products, urlFragment) matches what is
+  actually in the repo.
+- The Key features and Architecture sections (including the ASCII diagram)
+  match the real modules, tools, data flow, and outputs.
+- Every command in the Deploy section exists and is correct.
+- The Outputs table lists real artifacts and correct paths.
+- If README.md is already accurate, make NO edits to it.
+
+### Output requirements for CLAUDE.md and README.md
 
 - Maintain the current structure; update content in place for accuracy.
 - Add new sections only for significant undocumented findings.
 - Remove outdated information.
 - Be thorough but concise - every line should provide value.
-- If the file is already accurate, make NO edits to it.
+- If a file is already accurate, make NO edits to it.
 
 ## Part 2: TODO.md generation
 

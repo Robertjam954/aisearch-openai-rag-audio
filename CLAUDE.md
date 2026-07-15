@@ -199,14 +199,15 @@ This repository is self-documenting. Two mechanisms keep the docs honest:
 
 1. **End of every session:** before finishing any working session that changed
    code, commands, dependencies, structure, or conventions, update CLAUDE.md (and
-   the affected prep docs: PRODUCT.md, ARCHITECTURE.md, CONTRIBUTING.md) so they
-   match reality. Reality wins over stale documentation. This applies to human and
-   agent sessions alike.
+   the affected prep docs: README.md, PRODUCT.md, ARCHITECTURE.md, CONTRIBUTING.md)
+   so they match reality. Reality wins over stale documentation. This applies to
+   human and agent sessions alike.
 2. **Every Monday:** the `.github/workflows/update-claude-md.yml` workflow runs an
    automated verification pass (09:00 UTC). It re-analyzes the codebase, corrects
-   any drift in CLAUDE.md that session updates missed, regenerates the prioritized
-   `TODO.md` at the repo root, and opens a PR for review. It requires the
-   `CLAUDE_CODE_OAUTH_TOKEN` repository secret (generate with `claude setup-token`).
+   any drift in CLAUDE.md and README.md that session updates missed, regenerates
+   the prioritized `TODO.md` at the repo root, and opens a PR for review. It
+   requires the `CLAUDE_CODE_OAUTH_TOKEN` repository secret (generate with
+   `claude setup-token`).
 
 `TODO.md` is machine-refreshed weekly: treat it as the current backlog, edit it
 freely during the week, and expect the Monday run to re-prioritize it.

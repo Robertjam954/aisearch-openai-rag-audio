@@ -1,193 +1,206 @@
-# VoiceRAG: An Application Pattern for RAG + Voice Using Azure AI Search and the GPT-4o Realtime API for Audio
+---
+name: VoiceRAG (aisearch-openai-rag-audio)
+description: Voice-first RAG sample - browser audio streams to a Python middle tier that proxies the Azure OpenAI GPT-4o Realtime API and executes search and grounding tools against Azure AI Search server-side.
+languages:
+- python
+- typescript
+- bicep
+- azdeveloper
+products:
+- azure-openai
+- azure-cognitive-search
+- azure-container-apps
+- azure-storage-accounts
+page_type: sample
+urlFragment: aisearch-openai-rag-audio
+---
+<!-- YAML front-matter schema: https://review.learn.microsoft.com/en-us/help/contribute/samples/process/onboarding?branch=main#supported-metadata-fields-for-readmemd -->
+
+# VoiceRAG: RAG over a Voice Interface with Azure AI Search and the GPT-4o Realtime API
+
+- [User story](#user-story)
+  - [About this repo](#about-this-repo)
+  - [When should you use this repo?](#when-should-you-use-this-repo)
+  - [Key features](#key-features)
+  - [Target end users](#target-end-users)
+  - [Industry scenario](#industry-scenario)
+- [Architecture](#architecture)
+  - [Outputs](#outputs)
+- [Deploy](#deploy)
+  - [Pre-requisites](#pre-requisites)
+  - [Products used](#products-used)
+  - [Required licenses](#required-licenses)
+  - [Pricing considerations](#pricing-considerations)
+  - [Deploy instructions](#deploy-instructions)
+  - [Testing the deployment](#testing-the-deployment)
+- [Supporting documentation](#supporting-documentation)
+  - [Resource links](#resource-links)
+  - [Licensing](#licensing)
+- [Disclaimers](#disclaimers)
+
+## User story
+
+### About this repo
+
+VoiceRAG is a working sample of a voice-first Retrieval-Augmented Generation application. A user opens a web page, presses one button, and talks. The browser streams microphone audio over a WebSocket to a small Python (aiohttp) middle tier, which proxies the session to the Azure OpenAI GPT-4o Realtime API. The middle tier injects a server-enforced system prompt and two function tools (`search` and `report_grounding`) that query Azure AI Search; tool calls execute server-side and are hidden from the browser, so the client only ever sees audio, transcripts, and citation payloads. Answers come back as streamed spoken audio plus grounding citations rendered as clickable file chips.
+
+This is a fork of [Azure-Samples/aisearch-openai-rag-audio](https://github.com/Azure-Samples/aisearch-openai-rag-audio), kept as a portfolio repo. The sample knowledge base is a fictional Contoso Electronics HR/benefits corpus in `data/`. This README is updated at the end of each working session and verified by the automated Monday documentation workflow.
+
+### When should you use this repo?
+
+- You are building a voice interface over private data and want a reference implementation of the realtime-API-plus-tools pattern before writing your own middle tier.
+- You want to see how to keep RAG machinery (system prompt, tools, search credentials) server-side while the browser speaks the realtime protocol directly.
+- You need a small Azure footprint, deployable with one command and destroyable in minutes, to evaluate GPT-4o Realtime grounded on Azure AI Search.
+
+Out of scope by design: user authentication, per-user ACLs, conversation persistence, document upload from the UI, eval harnesses, and production hardening. See [PRODUCT.md](PRODUCT.md).
+
+### Key features
+
+- **Realtime WebSocket proxy** (`app/backend/rtmt.py`, class `RTMiddleTier`): terminates the browser's `/realtime` WebSocket, opens a second WebSocket to the Azure OpenAI Realtime API, and intercepts traffic in both directions - injecting the server-enforced system prompt, voice choice, and tool schemas into `session.update`, and scrubbing instructions, tools, and all `function_call` items from what the client receives. Output: the streamed audio response the browser plays, with the RAG machinery invisible to the client.
+- **Server-side `search` tool** (`app/backend/ragtools.py`): hybrid Azure AI Search query - full text plus a `VectorizableTextQuery` (k=50) on the embedding field when `AZURE_SEARCH_USE_VECTOR_QUERY` is true, semantic ranking when `AZURE_SEARCH_SEMANTIC_CONFIGURATION` is set, top 5 results. Output: `[chunk_id]: chunk` blocks returned to the model as a `function_call_output` item so it answers only from the knowledge base.
+- **Server-side `report_grounding` tool** (`app/backend/ragtools.py`): re-fetches the chunks the model cites and pushes `{sources: [{chunk_id, title, chunk}]}` to the browser as a synthetic `extension.middle_tier_tool_response` message. Output: the citation chips (`GroundingFiles` / `GroundingFileView`) the user clicks to verify what the voice said.
+- **Integrated-vectorization indexing** (`app/backend/setup_intvect.py`, run by the `azd up` postprovision hook or `scripts/setup_intvect.sh`): idempotently creates an AI Search data source, index (`chunk_id`, `parent_id`, `title`, `chunk`, `text_vector` 3072-dim HNSW cosine with a `text-embedding-3-large` vectorizer and semantic config `default`), skillset (SplitSkill 2000 chars / 500 overlap + AzureOpenAIEmbeddingSkill), and indexer, then uploads everything in `data/` to the blob container and runs the indexer. Output: the populated search index and the `content` blob container.
+- **Audio worklets** (`app/frontend/public/audio-processor-worklet.js`, `audio-playback-worklet.js`): capture mic audio as PCM16 at 24 kHz for `input_audio_buffer.append` messages and play `response.audio.delta` chunks, with barge-in (playback stops when the user starts speaking). Output: the live full-duplex voice conversation in the browser.
+- **Static frontend build** (`app/frontend/`, React 18 + TypeScript + Vite 7 + Tailwind, localized en/es/fr/ja): `npm run build` emits into `app/backend/static/`, which the backend serves at `/`. Output: the single-page app with mic button, status messages, and grounding chips.
+- **One-command infrastructure** (`infra/main.bicep` + `azure.yaml`): subscription-scope Bicep deployed with azd, provisioning Azure OpenAI (gpt-4o-realtime-preview + text-embedding-3-large), Azure AI Search, Blob Storage, Log Analytics, and an Azure Container App built remotely from `app/Dockerfile`. Output: the running app URL printed by `azd up`, secretless by default (managed identity; key auth disabled on provisioned services).
+
+### Target end users
+
+- Developers evaluating or building voice interfaces over private data: internal helpdesks, HR/benefits assistants, kiosk or hands-free scenarios, call-center prototypes.
+- Teams who want a minimal, readable implementation of the realtime middle-tier pattern.
+
+### Industry scenario
+
+The shipped demo is an HR/benefits assistant: employees ask spoken questions about health plans, perks, and policies from the fictional Contoso Electronics corpus and get spoken answers with citations. This fork is maintained as a portfolio/reference repo, not a supported product.
+
+## Architecture
+
+```
+                                  Browser (React 18 + Vite)
+                 +---------------------------------------------------------+
+                 |  mic --> audio-processor worklet (PCM16 @ 24 kHz)       |
+                 |  speaker <-- audio-playback worklet                     |
+                 |  citation chips (GroundingFiles / GroundingFileView)    |
+                 +----------------------------+----------------------------+
+                                              |
+                                              | WebSocket /realtime
+                                              | (function calls hidden from client)
+                                              v
+                 +---------------------------------------------------------+
+                 |  Python middle tier (aiohttp, Azure Container Apps)     |
+                 |  app.py ......... app factory, env/credential wiring,   |
+                 |                   serves static frontend at /           |
+                 |  rtmt.py ........ RTMiddleTier: bidirectional WS proxy, |
+                 |                   server-enforced prompt + tool config, |
+                 |                   server-side tool execution            |
+                 |  ragtools.py .... 'search' + 'report_grounding' tools   |
+                 +--------------+---------------------------+--------------+
+                                |                           |
+              wss /openai/realtime                SearchClient (aio)
+                                |                           |
+                                v                           v
+                 +-----------------------+    +-----------------------------+
+                 |  Azure OpenAI         |    |  Azure AI Search index      |
+                 |  gpt-4o-realtime-     |    |  chunk_id | parent_id |     |
+                 |    preview            |    |  title | chunk |            |
+                 |  text-embedding-3-    |    |  text_vector (3072, HNSW)   |
+                 |    large (used by the |    |  hybrid + semantic ranker,  |
+                 |    Search vectorizer) |    |  integrated vectorization   |
+                 +-----------------------+    +--------------+--------------+
+                                                             ^
+                                                             | indexer + skillset
+                                                             | (offline ingestion)
+                                              +--------------+--------------+
+                                              |  Azure Blob Storage         |
+                                              |  'content' container        |
+                                              |  <-- data/ uploaded by      |
+                                              |      setup_intvect.py       |
+                                              +-----------------------------+
+```
 
-[![Open in GitHub Codespaces](https://img.shields.io/static/v1?style=for-the-badge&label=GitHub+Codespaces&message=Open&color=brightgreen&logo=github)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&skip_quickstart=true&machine=basicLinux32gb&repo=860141324&devcontainer_path=.devcontainer%2Fdevcontainer.json&geo=WestUs2)
-[![Open in Dev Containers](https://img.shields.io/static/v1?style=for-the-badge&label=Dev%20Containers&message=Open&color=blue&logo=visualstudiocode)](https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/Azure-Samples/aisearch-openai-rag-audio)
+A voice turn: the frontend streams `input_audio_buffer.append` messages to `/realtime`; `RTMiddleTier` forwards them to Azure OpenAI while injecting session config on the way in and scrubbing tool machinery on the way out. When the model completes a `function_call`, the middle tier runs the matching tool from `ragtools.py` - `search` results feed the model, `report_grounding` results feed the browser - then issues `response.create` so the model finishes the spoken answer. Ingestion is a separate offline path: `azd up`'s postprovision hooks run `setup_intvect.py`, which builds the index/skillset/indexer and uploads `data/` to blob storage. Full detail in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-This repo contains an example of how to implement RAG support in applications that use voice as their user interface, powered by the GPT-4o realtime API for audio. We describe the pattern in more detail in [this blog post](https://aka.ms/voicerag), and you can see this sample app in action in [this short video](https://youtu.be/vXJka8xZ9Ko).
+### Outputs
 
-* [Features](#features)
-* [Architecture Diagram](#architecture-diagram)
-* [Getting Started](#getting-started)
-  * [GitHub Codespaces](#github-codespaces)
-  * [VS Code Dev Containers](#vs-code-dev-containers)
-  * [Local environment](#local-environment)
-* [Deploying the app](#deploying-the-app)
-* [Development server](#development-server)
-* [Guidance](#guidance)
-* [Resources](#resources)
-* [Getting help](#getting-help)
+| Artifact | Where it lands |
+|---|---|
+| Streamed audio answers + live transcripts | browser session (played via the playback worklet) |
+| Grounding citation payloads (`extension.middle_tier_tool_response`) | browser session (rendered as clickable chips) |
+| Azure AI Search index + data source + skillset + indexer | the provisioned AI Search service (created by `setup_intvect.py`) |
+| Uploaded knowledge-base documents | `content` blob container (from `data/`) |
+| Static frontend build | `app/backend/static/` (from `npm run build`) |
+| Local runtime env file | `app/backend/.env` (generated by `scripts/write_env.sh`, gitignored) |
+| Azure resources (OpenAI, Search, Storage, Log Analytics, Container App) | resource group created by `azd up` |
 
-## Features
+## Deploy
 
-* **Voice interface**: The app uses the browser's microphone to capture voice input, and sends it to the backend where it is processed by the Azure OpenAI GPT-4o Realtime API.
-* **RAG (Retrieval Augmented Generation)**: The app uses the Azure AI Search service to answer questions about a knowledge base, and sends the retrieved documents to the GPT-4o Realtime API to generate a response.
-* **Audio output**: The app plays the response from the GPT-4o Realtime API as audio, using the browser's audio capabilities.
-* **Citations**: The app shows the search results that were used to generate the response.
+### Pre-requisites
 
-### Architecture Diagram
+- An Azure subscription with access to Azure OpenAI (gpt-4o-realtime-preview is region-limited: the infra allows eastus2 and swedencentral).
+- [Azure Developer CLI (azd)](https://aka.ms/azure-dev/install)
+- Node.js 20
+- Python 3.11+ (the Dockerfile and devcontainer use 3.12)
+- Git; PowerShell 7 for the `.ps1` scripts on Windows
+- Alternatively, the included `.devcontainer/` provides all tools (forwards port 8765).
 
-The `RTClient` in the frontend receives the audio input, sends that to the Python backend which uses an `RTMiddleTier` object to interface with the Azure OpenAI real-time API, and includes a tool for searching Azure AI Search.
+### Products used
 
-![Diagram of real-time RAG pattern](docs/RTMTPattern.png)
+- Azure OpenAI Service (gpt-4o-realtime-preview, text-embedding-3-large)
+- Azure AI Search (hybrid + semantic ranking, integrated vectorization)
+- Azure Container Apps (+ Azure Container Registry, remote build)
+- Azure Blob Storage
+- Azure Log Analytics
 
-This repository includes infrastructure as code and a `Dockerfile` to deploy the app to Azure Container Apps, but it can also be run locally as long as Azure AI Search and Azure OpenAI services are configured.
+### Required licenses
 
-## Getting Started
+None beyond an Azure subscription. The repo itself is MIT licensed.
 
-You have a few options for getting started with this template. The quickest way to get started is [GitHub Codespaces](#github-codespaces), since it will setup all the tools for you, but you can also [set it up locally](#local-environment). You can also use a [VS Code dev container](#vs-code-dev-containers)
+### Pricing considerations
 
-### GitHub Codespaces
+`azd up` creates resources that incur costs immediately, primarily the Azure AI Search standard tier; Azure OpenAI is billed per token, Container Apps per consumption, Storage and Log Analytics per usage. Costs accrue even if you interrupt the deployment. Run `azd down` (or delete the resource group) when finished.
 
-You can run this repo virtually by using GitHub Codespaces, which will open a web-based VS Code in your browser:
+### Deploy instructions
 
-[![Open in GitHub Codespaces](https://img.shields.io/static/v1?style=for-the-badge&label=GitHub+Codespaces&message=Open&color=brightgreen&logo=github)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&skip_quickstart=true&machine=basicLinux32gb&repo=860141324&devcontainer_path=.devcontainer%2Fdevcontainer.json&geo=WestUs2)
+Deploy to Azure (provisions everything, builds and deploys the container, creates the index, ingests `data/`):
 
-Once the codespace opens (this may take several minutes), open a new terminal and proceed to [deploy the app](#deploying-the-app).
+```bash
+azd auth login
+azd env new          # names the resource group / environment
+azd up               # provision + deploy + postprovision indexing hooks
+azd down             # tear down when done
+```
 
-### VS Code Dev Containers
+Optional pre-`azd up` customization: reuse existing services or change the voice via azd environment variables - see [docs/existing_services.md](docs/existing_services.md) and [docs/customizing_deploy.md](docs/customizing_deploy.md).
 
-You can run the project in your local VS Code Dev Container using the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers):
+Run locally (after `azd up` has written `app/backend/.env`, or with your own services per [docs/existing_services.md](docs/existing_services.md)):
 
-1. Start Docker Desktop (install it if not already installed)
-2. Open the project:
+```bash
+./scripts/start.sh           # Linux/Mac: venv + npm install + build + backend on http://localhost:8765
+pwsh .\scripts\start.ps1     # Windows
+```
 
-    [![Open in Dev Containers](https://img.shields.io/static/v1?style=for-the-badge&label=Dev%20Containers&message=Open&color=blue&logo=visualstudiocode)](https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/azure-samples/aisearch-openai-rag-audio)
-3. In the VS Code window that opens, once the project files show up (this may take several minutes), open a new terminal, and proceed to [deploying the app](#deploying-the-app).
+Note the two ports: local `app.py` serves on 8765; the deployed container runs gunicorn on 8000 (Container Apps targetPort 8000). For frontend HMR, `cd app/frontend && npm run dev` proxies `/realtime` to `ws://localhost:8765`. Regenerate the local env file with `./scripts/write_env.sh`; re-run indexing with `./scripts/setup_intvect.sh`.
 
-### Local environment
+### Testing the deployment
 
-1. Install the required tools:
-   * [Azure Developer CLI](https://aka.ms/azure-dev/install)
-   * [Node.js](https://nodejs.org/)
-   * [Python >=3.11](https://www.python.org/downloads/)
-      * **Important**: Python and the pip package manager must be in the path in Windows for the setup scripts to work.
-      * **Important**: Ensure you can run `python --version` from console. On Ubuntu, you might need to run `sudo apt install python-is-python3` to link `python` to `python3`.
-   * [Git](https://git-scm.com/downloads)
-   * [Powershell](https://learn.microsoft.com/powershell/scripting/install/installing-powershell) - For Windows users only.
+1. Open the URL printed by `azd up` (or `http://localhost:8765` locally).
+2. Click the start/mic button and say "Hello", then ask a question about the sample data, e.g. "What is included in the Northwind Health Plus plan?" or "What is Contoso's whistleblower policy?".
+3. Expect a spoken audio answer and one or more grounding citation chips below it; clicking a chip opens the retrieved source chunk.
+4. Ask something outside the corpus - the assistant should say it does not know rather than hallucinate.
 
-2. Clone the repo (`git clone https://github.com/Azure-Samples/aisearch-openai-rag-audio`)
-3. Proceed to the next section to [deploy the app](#deploying-the-app).
+## Supporting documentation
 
-## Deploying the app
+### Resource links
 
-The steps below will provision Azure resources and deploy the application code to Azure Container Apps.
+- Prep docs: [PRODUCT.md](PRODUCT.md) (what and why), [ARCHITECTURE.md](ARCHITECTURE.md) (components and data flow), [CONTRIBUTING.md](CONTRIBUTING.md) (dev setup), [CLAUDE.md](CLAUDE.md) (agent operating manual), [AGENTS.md](AGENTS.md) (upstream onboarding doc, known drift), [TODO.md](TODO.md) (machine-refreshed weekly backlog)
+- Guides: [docs/existing_services.md](docs/existing_services.md), [docs/customizing_deploy.md](docs/customizing_deploy.md), [docs/manual_setup.md](docs/manual_setup.md)
+- Upstream: [Azure-Samples/aisearch-openai-rag-audio](https://github.com/Azure-Samples/aisearch-openai-rag-audio), [VoiceRAG blog post](https://aka.ms/voicerag), [demo video](https://youtu.be/vXJka8xZ9Ko)
+- [Azure OpenAI Realtime SDK samples](https://github.com/Azure-Samples/aoai-realtime-audio-sdk/)
 
-1. Login to your Azure account:
+### Licensing
 
-    ```shell
-    azd auth login
-    ```
+This repository is licensed under the [MIT License](LICENSE) (Copyright (c) 2024 Azure Samples).
 
-    For GitHub Codespaces users, if the previous command fails, try:
+## Disclaimers
 
-   ```shell
-    azd auth login --use-device-code
-    ```
-
-1. Create a new azd environment:
-
-    ```shell
-    azd env new
-    ```
-
-    Enter a name that will be used for the resource group.
-    This will create a new folder in the `.azure` folder, and set it as the active environment for any calls to `azd` going forward.
-
-1. (Optional) This is the point where you can customize the deployment by setting azd environment variables, in order to [use existing services](docs/existing_services.md) or [customize the voice choice](docs/customizing_deploy.md).
-
-1. Run this single command to provision the resources, deploy the code, and setup integrated vectorization for the sample data:
-
-   ```shell
-   azd up
-   ````
-
-   * **Important**: Beware that the resources created by this command will incur immediate costs, primarily from the AI Search resource. These resources may accrue costs even if you interrupt the command before it is fully executed. You can run `azd down` or delete the resources manually to avoid unnecessary spending.
-   * You will be prompted to select two locations, one for the majority of resources and one for the OpenAI resource, which is currently a short list. That location list is based on the [OpenAI model availability table](https://learn.microsoft.com/azure/ai-services/openai/concepts/models#global-standard-model-availability) and may become outdated as availability changes.
-
-1. After the application has been successfully deployed you will see a URL printed to the console.  Navigate to that URL to interact with the app in your browser. To try out the app, click the "Start conversation button", say "Hello", and then ask a question about your data like "What is the whistleblower policy for Contoso electronics?" You can also now run the app locally by following the instructions in [the next section](#development-server).
-
-## Development server
-
-You can run this app locally using either the Azure services you provisioned by following the [deployment instructions](#deploying-the-app), or by pointing the local app at already [existing services](docs/existing_services.md).
-
-1. If you deployed with `azd up`, you should see a `app/backend/.env` file with the necessary environment variables.
-
-2. If did *not* use `azd up`, you will need to create `app/backend/.env` file with the following environment variables:
-
-   ```shell
-   AZURE_OPENAI_ENDPOINT=wss://<your instance name>.openai.azure.com
-   AZURE_OPENAI_REALTIME_DEPLOYMENT=gpt-4o-realtime-preview
-   AZURE_OPENAI_REALTIME_VOICE_CHOICE=<choose one: echo, alloy, shimmer>
-   AZURE_OPENAI_API_KEY=<your api key>
-   AZURE_SEARCH_ENDPOINT=https://<your service name>.search.windows.net
-   AZURE_SEARCH_INDEX=<your index name>
-   AZURE_SEARCH_API_KEY=<your api key>
-   ```
-
-   To use Entra ID (your user when running locally, managed identity when deployed) simply don't set the keys.
-
-3. Run this command to start the app:
-
-   Windows:
-
-   ```pwsh
-   pwsh .\scripts\start.ps1
-   ```
-
-   Linux/Mac:
-
-   ```bash
-   ./scripts/start.sh
-   ```
-
-4. The app is available on [http://localhost:8765](http://localhost:8765).
-
-   Once the app is running, when you navigate to the URL above you should see the start screen of the app:
-   ![app screenshot](docs/talktoyourdataapp.png)
-
-   To try out the app, click the "Start conversation button", say "Hello", and then ask a question about your data like "What is the whistleblower policy for Contoso electronics?"
-
-## Guidance
-
-### Costs
-
-Pricing varies per region and usage, so it isn't possible to predict exact costs for your usage.
-However, you can try the [Azure pricing calculator](https://azure.com/e/a87a169b256e43c089015fda8182ca87) for the resources below.
-
-* Azure Container Apps: Consumption plan with 1 CPU core, 2.0 GB RAM. Pricing with Pay-as-You-Go. [Pricing](https://azure.microsoft.com/pricing/details/container-apps/)
-* Azure OpenAI: Standard tier, gpt-4o-realtime and text-embedding-3-large models. Pricing per 1K tokens used. [Pricing](https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/)
-* Azure AI Search: Standard tier, 1 replica, free level of semantic search. Pricing per hour. [Pricing](https://azure.microsoft.com/pricing/details/search/)
-* Azure Blob Storage: Standard tier with ZRS (Zone-redundant storage). Pricing per storage and read operations. [Pricing](https://azure.microsoft.com/pricing/details/storage/blobs/)
-* Azure Monitor: Pay-as-you-go tier. Costs based on data ingested. [Pricing](https://azure.microsoft.com/pricing/details/monitor/)
-
-To reduce costs, you can switch to free SKUs for various services, but those SKUs have limitations.
-
-⚠️ To avoid unnecessary costs, remember to take down your app if it's no longer in use,
-either by deleting the resource group in the Portal or running `azd down`.
-
-### Security
-
-This template uses [Managed Identity](https://learn.microsoft.com/entra/identity/managed-identities-azure-resources/overview) to eliminate the need for developers to manage these credentials. Applications can use managed identities to obtain Microsoft Entra tokens without having to manage any credentials.To ensure best practices in your repo we recommend anyone creating solutions based on our templates ensure that the [Github secret scanning](https://docs.github.com/code-security/secret-scanning/about-secret-scanning) setting is enabled in your repos.
-
-### Notes
-
->Sample data: The PDF documents used in this demo contain information generated using a language model (Azure OpenAI Service). The information contained in these documents is only for demonstration purposes and does not reflect the opinions or beliefs of Microsoft. Microsoft makes no representations or warranties of any kind, express or implied, about the completeness, accuracy, reliability, suitability or availability with respect to the information contained in this document. All rights reserved to Microsoft.
-
-## Resources
-
-* [Blog post: VoiceRAG](https://aka.ms/voicerag)
-* [Demo video: VoiceRAG](https://youtu.be/vXJka8xZ9Ko)
-* [Azure OpenAI Realtime Documentation](https://github.com/Azure-Samples/aoai-realtime-audio-sdk/)
-
-### Getting help
-
-This is a sample built to demonstrate the capabilities of modern Generative AI apps and how they can be built in Azure. For help with deploying this sample, please post in [GitHub Issues](/issues). If you're a Microsoft employee, you can also post in [our Teams channel](https://aka.ms/azai-python-help).
-
-This repository is supported by the maintainers, _not_ by Microsoft Support,
-so please use the support mechanisms described above, and we will do our best to help you out.
-
-For general questions about developing AI solutions on Azure,
-join the Azure AI Foundry Developer Community:
-
-[![Azure AI Foundry Discord](https://img.shields.io/badge/Discord-Azure_AI_Foundry_Community_Discord-blue?style=for-the-badge&logo=discord&color=5865f2&logoColor=fff)](https://aka.ms/foundry/discord)
-[![Azure AI Foundry Developer Forum](https://img.shields.io/badge/GitHub-Azure_AI_Foundry_Developer_Forum-blue?style=for-the-badge&logo=github&color=000000&logoColor=fff)](https://aka.ms/foundry/forum)
+This is sample/portfolio code provided as-is, without warranty of any kind. It is a pattern demonstration, not a production-hardened product: there is no authentication, no content safety filtering, no rate limiting, and no automated test suite. You are responsible for all costs of any Azure resources you provision; `azd up` starts billing immediately and `azd down` removes it. The sample documents in `data/` are fictional, LLM-generated Contoso Electronics content for demonstration only; the repository contains no real personal or sensitive data, and none should be added.
